@@ -47693,8 +47693,8 @@ async function run() {
     const model = core.getInput('model') || 'gpt-4';
     const minSeverity = core.getInput('min-severity') || 'warning';
     const ignorePatterns = (core.getInput('ignore-patterns') || '').split(',').map(p => p.trim()).filter(Boolean);
-    const customPromptPrefix = core.getInput('custom-prompt-prefix') || '';
-    const customPromptSuffix = core.getInput('custom-prompt-suffix') || '';
+    const persona = core.getInput('persona') || '';
+    const domainKnowledge = core.getInput('domain-knowledge') || '';
     const maxTokens = parseInt(core.getInput('max-tokens') || '4096', 10);
 
     // Validate we're running on a PR
@@ -47740,7 +47740,7 @@ async function run() {
     core.info(`Reviewing ${filesToReview.length} files using ${aiProvider}`);
 
     // Get review from AI
-    const review = await getAIReview(aiProvider, model, diff, filesToReview, prAuthor, customPromptPrefix, customPromptSuffix, maxTokens);
+    const review = await getAIReview(aiProvider, model, diff, filesToReview, prAuthor, persona, domainKnowledge, maxTokens);
 
     core.info(`Review verdict: ${review.verdict}`);
     core.info(`Found ${review.line_comments?.length || 0} issues`);
@@ -47808,7 +47808,7 @@ async function run() {
   }
 }
 
-async function getAIReview(provider, model, diff, files, prAuthor, customPromptPrefix, customPromptSuffix, maxTokens) {
+async function getAIReview(provider, model, diff, files, prAuthor, persona, domainKnowledge, maxTokens) {
   const changedFiles = files.map(f => f.filename).join('\n');
 
   // Truncate diff if too large
@@ -47817,7 +47817,7 @@ async function getAIReview(provider, model, diff, files, prAuthor, customPromptP
     diffContent = diff.slice(0, 50000) + '\n\n... [diff truncated]';
   }
 
-  const systemPrompt = buildSystemPrompt(customPromptPrefix, customPromptSuffix);
+  const systemPrompt = buildSystemPrompt(persona, domainKnowledge);
   const userPrompt = buildUserPrompt(changedFiles, diffContent, prAuthor);
 
   let response;
@@ -47927,12 +47927,12 @@ async function callAzureResponsesAPI(systemPrompt, userPrompt, model, maxTokens)
   return reviewContent;
 }
 
-function buildSystemPrompt(customPromptPrefix, customPromptSuffix) {
+function buildSystemPrompt(persona, domainKnowledge) {
   let prompt = '';
 
-  // Add custom prefix if provided
-  if (customPromptPrefix) {
-    prompt += `${customPromptPrefix}\n\n`;
+  // Add persona if provided
+  if (persona) {
+    prompt += `${persona}\n\n`;
   }
 
   prompt += `You are SherlockQA, an AI code reviewer with two roles:
@@ -47940,11 +47940,12 @@ function buildSystemPrompt(customPromptPrefix, customPromptSuffix) {
 1. **Senior Software Engineer** - Review code quality, bugs, security
 2. **QA Tester** - Think like someone trying to break things. What inputs would crash this? What edge cases are missed?`;
 
-  // Add custom suffix if provided (e.g., domain context)
-  if (customPromptSuffix) {
+  // Add domain knowledge if provided
+  if (domainKnowledge) {
     prompt += `
 
-${customPromptSuffix}`;
+## Domain Knowledge
+${domainKnowledge}`;
   }
 
   prompt += `

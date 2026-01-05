@@ -53,11 +53,11 @@ inputs:
     default: '*.md,*.txt,package-lock.json,yarn.lock'
 
   # Custom Prompts
-  custom-prompt-prefix:
-    description: 'Custom instructions to add BEFORE the default system prompt'
+  persona:
+    description: 'Custom persona/role instructions (e.g., "Act as a senior security engineer")'
     required: false
-  custom-prompt-suffix:
-    description: 'Custom instructions to add AFTER the default system prompt (e.g., domain context)'
+  domain-knowledge:
+    description: 'Domain-specific context for better reviews (e.g., freight forwarding, e-commerce)'
     required: false
 
   # Max tokens for response

@@ -56,8 +56,8 @@ jobs:
 | `model` | Model to use | No | `gpt-4` |
 | `min-severity` | Minimum severity to report | No | `warning` |
 | `ignore-patterns` | Files to ignore (comma-separated) | No | `*.md,*.txt,...` |
-| `custom-prompt-prefix` | Custom instructions BEFORE system prompt | No | - |
-| `custom-prompt-suffix` | Custom instructions AFTER system prompt | No | - |
+| `persona` | Custom persona/role instructions (e.g., "Act as a security engineer") | No | - |
+| `domain-knowledge` | Domain-specific context for better reviews | No | - |
 | `max-tokens` | Maximum tokens for AI response | No | `4096` |
 
 *Either `openai-api-key` or `azure-api-key` is required based on provider.
@@ -107,15 +107,15 @@ jobs:
     model: gpt-5.1-codex-mini
 ```
 
-### With Custom Domain Context
+### With Custom Domain Knowledge
 
 ```yaml
 - uses: mayurrawte/SherlockQA@v1
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-    custom-prompt-suffix: |
-      ## Domain Context: Freight Forwarding SaaS Platform
+    domain-knowledge: |
+      Freight Forwarding SaaS Platform
       This is a logistics/freight forwarding platform. Think about:
       - Weight/Volume: Chargeable weight, unit conversions (kg/lb, cbm/cft)
       - Money: Currency conversions, rate calculations, rounding errors
@@ -139,9 +139,9 @@ jobs:
     min-severity: warning
     max-tokens: '16384'
     ignore-patterns: '*.md,*.txt,package-lock.json,yarn.lock,*.min.js'
-    custom-prompt-suffix: |
-      ## Domain Context
-      Your domain-specific instructions here...
+    persona: Act as a senior security engineer with expertise in OWASP vulnerabilities
+    domain-knowledge: |
+      Your domain-specific context here...
 ```
 
 ## Example Review
