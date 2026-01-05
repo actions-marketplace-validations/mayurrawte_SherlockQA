@@ -10,6 +10,9 @@ async function run() {
     const model = core.getInput('model') || 'gpt-4';
     const minSeverity = core.getInput('min-severity') || 'warning';
     const ignorePatterns = (core.getInput('ignore-patterns') || '').split(',').map(p => p.trim()).filter(Boolean);
+    const customPromptPrefix = core.getInput('custom-prompt-prefix') || '';
+    const customPromptSuffix = core.getInput('custom-prompt-suffix') || '';
+    const maxTokens = parseInt(core.getInput('max-tokens') || '4096', 10);
 
     // Validate we're running on a PR
     const context = github.context;
@@ -51,13 +54,10 @@ async function run() {
       return;
     }
 
-    core.info(`Reviewing ${filesToReview.length} files`);
-
-    // Create AI client
-    const client = createAIClient(aiProvider);
+    core.info(`Reviewing ${filesToReview.length} files using ${aiProvider}`);
 
     // Get review from AI
-    const review = await getAIReview(client, model, diff, filesToReview, prAuthor);
+    const review = await getAIReview(aiProvider, model, diff, filesToReview, prAuthor, customPromptPrefix, customPromptSuffix, maxTokens);
 
     core.info(`Review verdict: ${review.verdict}`);
     core.info(`Found ${review.line_comments?.length || 0} issues`);
@@ -87,7 +87,7 @@ async function run() {
     }
 
     // Build review body
-    const body = buildReviewBody(review);
+    const body = buildReviewBody(review, prAuthor);
 
     // Determine review event
     let event = 'COMMENT';
@@ -125,26 +125,7 @@ async function run() {
   }
 }
 
-function createAIClient(provider) {
-  if (provider === 'azure') {
-    const apiKey = core.getInput('azure-api-key', { required: true });
-    const endpoint = core.getInput('azure-endpoint', { required: true });
-    const model = core.getInput('azure-model', { required: true });
-
-    return new OpenAI({
-      apiKey,
-      baseURL: `${endpoint}/openai/deployments/${model}`,
-      defaultQuery: { 'api-version': '2024-02-15-preview' },
-      defaultHeaders: { 'api-key': apiKey }
-    });
-  }
-
-  // Default: OpenAI
-  const apiKey = core.getInput('openai-api-key', { required: true });
-  return new OpenAI({ apiKey });
-}
-
-async function getAIReview(client, model, diff, files, prAuthor) {
+async function getAIReview(provider, model, diff, files, prAuthor, customPromptPrefix, customPromptSuffix, maxTokens) {
   const changedFiles = files.map(f => f.filename).join('\n');
 
   // Truncate diff if too large
@@ -153,10 +134,137 @@ async function getAIReview(client, model, diff, files, prAuthor) {
     diffContent = diff.slice(0, 50000) + '\n\n... [diff truncated]';
   }
 
-  const systemPrompt = `You are SherlockQA, an AI code reviewer with two roles:
+  const systemPrompt = buildSystemPrompt(customPromptPrefix, customPromptSuffix);
+  const userPrompt = buildUserPrompt(changedFiles, diffContent, prAuthor);
+
+  let response;
+
+  if (provider === 'azure-responses') {
+    response = await callAzureResponsesAPI(systemPrompt, userPrompt, model, maxTokens);
+  } else if (provider === 'azure') {
+    response = await callAzureOpenAI(systemPrompt, userPrompt, model, maxTokens);
+  } else {
+    response = await callOpenAI(systemPrompt, userPrompt, model, maxTokens);
+  }
+
+  return parseReviewResponse(response);
+}
+
+async function callOpenAI(systemPrompt, userPrompt, model, maxTokens) {
+  const apiKey = core.getInput('openai-api-key', { required: true });
+  const client = new OpenAI({ apiKey });
+
+  const response = await client.chat.completions.create({
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ],
+    max_tokens: maxTokens,
+    temperature: 0.3
+  });
+
+  return response.choices[0].message.content;
+}
+
+async function callAzureOpenAI(systemPrompt, userPrompt, model, maxTokens) {
+  const apiKey = core.getInput('azure-api-key', { required: true });
+  const endpoint = core.getInput('azure-endpoint', { required: true });
+  const deployment = core.getInput('azure-deployment') || model;
+  const apiVersion = core.getInput('azure-api-version') || '2024-02-15-preview';
+
+  const client = new OpenAI({
+    apiKey,
+    baseURL: `${endpoint}/openai/deployments/${deployment}`,
+    defaultQuery: { 'api-version': apiVersion },
+    defaultHeaders: { 'api-key': apiKey }
+  });
+
+  const response = await client.chat.completions.create({
+    model: deployment,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ],
+    max_tokens: maxTokens,
+    temperature: 0.3
+  });
+
+  return response.choices[0].message.content;
+}
+
+async function callAzureResponsesAPI(systemPrompt, userPrompt, model, maxTokens) {
+  const apiKey = core.getInput('azure-api-key', { required: true });
+  const endpoint = core.getInput('azure-endpoint', { required: true });
+  const apiVersion = core.getInput('azure-api-version') || '2025-04-01-preview';
+
+  // Combine prompts for Responses API format
+  const fullPrompt = `${systemPrompt}\n\n---\n\n${userPrompt}`;
+
+  const url = `${endpoint}/openai/responses?api-version=${apiVersion}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      input: fullPrompt,
+      max_output_tokens: maxTokens,
+      model: model
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Azure Responses API error: ${response.status} - ${errorText}`);
+  }
+
+  const result = await response.json();
+
+  // Extract content from Responses API format
+  let reviewContent = '';
+  if (result.output && Array.isArray(result.output)) {
+    for (const item of result.output) {
+      if (item.type === 'message' && item.content) {
+        for (const contentItem of item.content) {
+          if (contentItem.type === 'output_text') {
+            reviewContent += contentItem.text || '';
+          }
+        }
+      }
+    }
+  }
+
+  if (!reviewContent) {
+    throw new Error(`Unable to parse Azure Responses API response: ${JSON.stringify(result).slice(0, 500)}`);
+  }
+
+  return reviewContent;
+}
+
+function buildSystemPrompt(customPromptPrefix, customPromptSuffix) {
+  let prompt = '';
+
+  // Add custom prefix if provided
+  if (customPromptPrefix) {
+    prompt += `${customPromptPrefix}\n\n`;
+  }
+
+  prompt += `You are SherlockQA, an AI code reviewer with two roles:
 
 1. **Senior Software Engineer** - Review code quality, bugs, security
-2. **QA Tester** - Think like someone trying to break things. What inputs would crash this? What edge cases are missed?
+2. **QA Tester** - Think like someone trying to break things. What inputs would crash this? What edge cases are missed?`;
+
+  // Add custom suffix if provided (e.g., domain context)
+  if (customPromptSuffix) {
+    prompt += `
+
+${customPromptSuffix}`;
+  }
+
+  prompt += `
 
 ## Review Focus:
 - **Bugs** - Null checks, edge cases, off-by-one errors, division by zero
@@ -166,25 +274,32 @@ async function getAIReview(client, model, diff, files, prAuthor) {
 - **Orphaned/Incomplete** - Missing pairs (create without delete, open without close, etc.)
 
 ## Output Format:
-Respond with ONLY a JSON object:
+You MUST respond with a JSON object in this exact format:
+\`\`\`json
 {
   "summary": "One sentence describing what this PR does",
   "line_comments": [
     {"file": "path/to/file.py", "line": 42, "severity": "error|warning|suggestion", "comment": "Issue description"}
   ],
   "tests_required": true|false,
-  "test_suggestion": "What tests to write if needed",
+  "test_suggestion": "If tests_required is true, explain what tests to write",
   "qa_scenarios": ["Scenario 1", "Scenario 2"],
   "questions": ["Question for author"],
   "verdict": "approved|needs_changes|do_not_merge"
 }
+\`\`\`
 
-Guidelines:
+## Guidelines:
 - ONLY comment on actual issues, not style preferences
 - Use severity "error" for bugs/security, "warning" for potential problems, "suggestion" for improvements
+- Set tests_required to true only for new business logic without coverage
 - Keep comments concise and actionable`;
 
-  const userPrompt = `Review this pull request:
+  return prompt;
+}
+
+function buildUserPrompt(changedFiles, diffContent, prAuthor) {
+  return `Please review the following pull request changes:
 
 ## PR Author: @${prAuthor}
 
@@ -194,20 +309,9 @@ ${changedFiles}
 ## Diff:
 \`\`\`diff
 ${diffContent}
-\`\`\``;
+\`\`\`
 
-  const response = await client.chat.completions.create({
-    model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt }
-    ],
-    max_tokens: 4096,
-    temperature: 0.3
-  });
-
-  const content = response.choices[0].message.content;
-  return parseReviewResponse(content);
+Respond with ONLY the JSON object as specified. No additional text.`;
 }
 
 function parseReviewResponse(content) {
@@ -223,6 +327,7 @@ function parseReviewResponse(content) {
     return JSON.parse(jsonContent);
   } catch (error) {
     core.warning(`Failed to parse AI response: ${error.message}`);
+    core.warning(`Raw response: ${content.slice(0, 500)}`);
     return {
       summary: 'Unable to parse AI response',
       line_comments: [],
@@ -274,13 +379,15 @@ function parseDiffForLinePositions(diffText) {
   return fileLineMap;
 }
 
-function buildReviewBody(review) {
+function buildReviewBody(review, prAuthor) {
   const parts = [`## 🔍 SherlockQA's Review\n`];
 
-  parts.push(`### Summary\n${review.summary || 'No summary'}\n`);
+  parts.push(`### 📝 Summary\n${review.summary || 'No summary'}\n`);
 
   if (review.tests_required && review.test_suggestion) {
-    parts.push(`### 🧪 Tests Required\n${review.test_suggestion}\n`);
+    parts.push(`### 🧪 Tests Required`);
+    parts.push(`⚠️ **@${prAuthor}** - Please add test cases for this change:\n`);
+    parts.push(`${review.test_suggestion}\n`);
   }
 
   if (review.qa_scenarios?.length > 0) {
@@ -297,7 +404,7 @@ function buildReviewBody(review) {
 
   const verdictEmoji = { approved: '✅', needs_changes: '⚠️', do_not_merge: '❌' };
   const verdictText = { approved: 'Approved', needs_changes: 'Needs Changes', do_not_merge: 'Do Not Merge' };
-  parts.push(`### Verdict\n${verdictEmoji[review.verdict] || '⚠️'} ${verdictText[review.verdict] || review.verdict}`);
+  parts.push(`### 🏁 Verdict\n${verdictEmoji[review.verdict] || '⚠️'} ${verdictText[review.verdict] || review.verdict}`);
 
   return parts.join('\n');
 }

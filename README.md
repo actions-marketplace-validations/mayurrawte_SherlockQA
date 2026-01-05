@@ -14,6 +14,8 @@ SherlockQA is a GitHub Action that reviews your pull requests using AI, identify
 - **QA Test Scenarios** - Suggests manual test cases based on code changes
 - **Test Suggestions** - Recommends unit tests when new logic is added
 - **Smart Verdicts** - Approves, requests changes, or flags PRs
+- **Custom Prompts** - Add domain-specific context for better reviews
+- **Multiple AI Providers** - Supports OpenAI, Azure OpenAI, and Azure Responses API
 
 ## Quick Start
 
@@ -45,14 +47,18 @@ jobs:
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `github-token` | GitHub token for API access | Yes | `${{ github.token }}` |
+| `ai-provider` | AI provider (`openai`, `azure`, `azure-responses`) | No | `openai` |
 | `openai-api-key` | OpenAI API key | Yes* | - |
 | `azure-api-key` | Azure OpenAI API key | Yes* | - |
-| `azure-endpoint` | Azure OpenAI endpoint | No | - |
-| `azure-model` | Azure OpenAI model name | No | - |
-| `ai-provider` | AI provider (`openai` or `azure`) | No | `openai` |
+| `azure-endpoint` | Azure OpenAI endpoint URL | No | - |
+| `azure-deployment` | Azure OpenAI deployment name | No | - |
+| `azure-api-version` | Azure OpenAI API version | No | `2024-02-15-preview` |
 | `model` | Model to use | No | `gpt-4` |
 | `min-severity` | Minimum severity to report | No | `warning` |
 | `ignore-patterns` | Files to ignore (comma-separated) | No | `*.md,*.txt,...` |
+| `custom-prompt-prefix` | Custom instructions BEFORE system prompt | No | - |
+| `custom-prompt-suffix` | Custom instructions AFTER system prompt | No | - |
+| `max-tokens` | Maximum tokens for AI response | No | `4096` |
 
 *Either `openai-api-key` or `azure-api-key` is required based on provider.
 
@@ -76,7 +82,7 @@ jobs:
     model: gpt-4
 ```
 
-### With Azure OpenAI
+### With Azure OpenAI (Chat Completions API)
 
 ```yaml
 - uses: mayurrawte/SherlockQA@v1
@@ -85,19 +91,57 @@ jobs:
     ai-provider: azure
     azure-api-key: ${{ secrets.AZURE_OPENAI_KEY }}
     azure-endpoint: https://your-resource.openai.azure.com
-    azure-model: gpt-4
+    azure-deployment: gpt-4
 ```
 
-### Custom Configuration
+### With Azure Responses API
+
+```yaml
+- uses: mayurrawte/SherlockQA@v1
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    ai-provider: azure-responses
+    azure-api-key: ${{ secrets.AZURE_API_KEY }}
+    azure-endpoint: https://your-resource.cognitiveservices.azure.com
+    azure-api-version: '2025-04-01-preview'
+    model: gpt-5.1-codex-mini
+```
+
+### With Custom Domain Context
 
 ```yaml
 - uses: mayurrawte/SherlockQA@v1
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-    model: gpt-4-turbo
-    min-severity: error
-    ignore-patterns: "*.md,*.txt,docs/*,*.lock"
+    custom-prompt-suffix: |
+      ## Domain Context: Freight Forwarding SaaS Platform
+      This is a logistics/freight forwarding platform. Think about:
+      - Weight/Volume: Chargeable weight, unit conversions (kg/lb, cbm/cft)
+      - Money: Currency conversions, rate calculations, rounding errors
+      - Shipping: FCL/LCL, multi-leg shipments, container types
+      - Documents: AWB, Bill of Lading, commercial invoices
+      - Timezones: ETD/ETA dates across timezones
+      - Edge cases: Zero weight, negative amounts, missing carrier data
+```
+
+### Full Configuration Example
+
+```yaml
+- uses: mayurrawte/SherlockQA@v1
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    ai-provider: azure-responses
+    azure-api-key: ${{ secrets.AZURE_API_KEY }}
+    azure-endpoint: https://your-resource.cognitiveservices.azure.com
+    azure-api-version: '2025-04-01-preview'
+    model: gpt-5.1-codex-mini
+    min-severity: warning
+    max-tokens: '16384'
+    ignore-patterns: '*.md,*.txt,package-lock.json,yarn.lock,*.min.js'
+    custom-prompt-suffix: |
+      ## Domain Context
+      Your domain-specific instructions here...
 ```
 
 ## Example Review
@@ -107,10 +151,11 @@ When SherlockQA reviews your PR, you'll see:
 ```markdown
 ## 🔍 SherlockQA's Review
 
-### Summary
+### 📝 Summary
 This PR adds user authentication with JWT tokens.
 
 ### 🧪 Tests Required
+⚠️ @author - Please add test cases for this change:
 Add unit tests for token validation and expiration handling.
 
 ### 🎯 QA Test Scenarios
@@ -118,7 +163,7 @@ Add unit tests for token validation and expiration handling.
 - [ ] Test token expiration after 24 hours
 - [ ] Test concurrent sessions
 
-### Verdict
+### 🏁 Verdict
 ⚠️ Needs Changes
 ```
 

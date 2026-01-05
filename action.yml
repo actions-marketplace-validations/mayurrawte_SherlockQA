@@ -11,26 +11,38 @@ inputs:
     description: 'GitHub token for API access'
     required: true
     default: ${{ github.token }}
+
+  # AI Provider
+  ai-provider:
+    description: 'AI provider to use (openai, azure, azure-responses)'
+    required: false
+    default: 'openai'
+
+  # OpenAI Configuration
   openai-api-key:
     description: 'OpenAI API key'
     required: false
-  azure-api-key:
-    description: 'Azure OpenAI API key'
-    required: false
-  azure-endpoint:
-    description: 'Azure OpenAI endpoint URL'
-    required: false
-  azure-model:
-    description: 'Azure OpenAI model deployment name'
-    required: false
-  ai-provider:
-    description: 'AI provider to use (openai or azure)'
-    required: false
-    default: 'openai'
   model:
     description: 'Model to use for review'
     required: false
     default: 'gpt-4'
+
+  # Azure OpenAI Configuration
+  azure-api-key:
+    description: 'Azure OpenAI API key'
+    required: false
+  azure-endpoint:
+    description: 'Azure OpenAI endpoint URL (e.g., https://your-resource.openai.azure.com)'
+    required: false
+  azure-deployment:
+    description: 'Azure OpenAI deployment name'
+    required: false
+  azure-api-version:
+    description: 'Azure OpenAI API version'
+    required: false
+    default: '2024-02-15-preview'
+
+  # Review Configuration
   min-severity:
     description: 'Minimum severity to report (error, warning, suggestion)'
     required: false
@@ -39,6 +51,20 @@ inputs:
     description: 'Comma-separated list of file patterns to ignore'
     required: false
     default: '*.md,*.txt,package-lock.json,yarn.lock'
+
+  # Custom Prompts
+  custom-prompt-prefix:
+    description: 'Custom instructions to add BEFORE the default system prompt'
+    required: false
+  custom-prompt-suffix:
+    description: 'Custom instructions to add AFTER the default system prompt (e.g., domain context)'
+    required: false
+
+  # Max tokens for response
+  max-tokens:
+    description: 'Maximum tokens for AI response'
+    required: false
+    default: '4096'
 
 outputs:
   verdict:
