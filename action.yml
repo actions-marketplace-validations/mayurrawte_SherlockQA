@@ -78,6 +78,22 @@ inputs:
     required: false
     default: 'false'
 
+  # Output Style
+  review-style:
+    description: 'Review output style - compact (verdict at top, concise) or detailed (verbose)'
+    required: false
+    default: 'compact'
+
+  use-emoji:
+    description: 'Use emojis in review output'
+    required: false
+    default: 'true'
+
+  personality:
+    description: 'Review personality - detective (Sherlock), bro (casual dude), desi (Hinglish), professional (formal), enthusiastic (hyped up)'
+    required: false
+    default: 'detective'
+
 outputs:
   verdict:
     description: 'Review verdict (approved, needs_changes, do_not_merge)'

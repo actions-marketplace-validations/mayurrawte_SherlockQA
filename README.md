@@ -73,6 +73,9 @@ jobs:
 | `max-tokens` | Maximum tokens for AI response | No | `4096` |
 | `auto-approve` | Submit APPROVE when verdict is approved (see [Permissions](#permissions)) | No | `false` |
 | `code-quality` | Enable code quality analysis (repetitive code, code smells, complexity) | No | `false` |
+| `review-style` | Output style: `compact` (verdict at top, concise) or `detailed` (verbose) | No | `compact` |
+| `use-emoji` | Use emojis in review output | No | `true` |
+| `personality` | Review personality: `detective`, `bro`, `desi`, `professional`, `enthusiastic` | No | `detective` |
 
 *Either `openai-api-key` or `azure-api-key` is required based on provider.
 
@@ -164,40 +167,63 @@ jobs:
     min-severity: warning
     max-tokens: '16384'
     ignore-patterns: '*.md,*.txt,package-lock.json,yarn.lock,*.min.js'
-    persona: Act as a senior security engineer with expertise in OWASP vulnerabilities
     auto-approve: true
     code-quality: true
+    review-style: compact
+    personality: detective
     domain-knowledge: |
       Your domain-specific context here...
 ```
 
-## Example Review
+## Personalities
 
-When SherlockQA reviews your PR, you'll see:
+SherlockQA can review with different personalities - pick one that matches your team vibe:
+
+| Personality | Style | Example Quote |
+|-------------|-------|---------------|
+| `detective` | Sherlock Holmes-style deductive reasoning | "I deduce this null check is missing, Watson!" |
+| `bro` | Casual buddy, like your chill dev friend | "bro what is this 😅" / "ngl this looks clean, ship it 🚀" |
+| `desi` | Hinglish-speaking desi dev buddy | "arre yaar yeh kya hai 😅" / "sahi hai bhai, ship karo!" |
+| `professional` | Formal, enterprise-style | "The implementation is sound. One consideration:" |
+| `enthusiastic` | Super positive, gets excited about code | "Love this! 🔥" / "This is *chef's kiss* 👨‍🍳" |
+
+## Example Review (Compact Style - Default)
+
+```markdown
+## 🔍 SherlockQA's Review
+
+**Verdict:** ✅ Approved | 0 issues · 2 QA scenarios
+
+**Summary:** Adds user authentication with JWT tokens.
+
+**Code Quality:** Elementary! Clean token handling, though that validation function is growing some extra limbs 🦑
+
+<details>
+<summary>🎯 <b>QA Scenarios (2)</b></summary>
+
+- [ ] Test login with invalid credentials
+- [ ] Test token expiration after 24 hours
+
+</details>
+```
+
+## Example Review (Detailed Style)
 
 ```markdown
 ## 🔍 SherlockQA's Review
 
 ### 📝 Summary
-This PR adds user authentication with JWT tokens.
-
-### 🧪 Tests Required
-⚠️ @author - Please add test cases for this change:
-Add unit tests for token validation and expiration handling.
+Adds user authentication with JWT tokens.
 
 ### 🎯 QA Test Scenarios
 - [ ] Test login with invalid credentials
 - [ ] Test token expiration after 24 hours
-- [ ] Test concurrent sessions
 
 ### 🧹 Code Quality
-Good overall structure with clear separation of concerns.
-
-- Consider extracting token generation logic into a separate utility function
-- The validateToken function has high cyclomatic complexity (8 branches)
+The game is afoot! Solid implementation, Watson would approve.
 
 ### 🏁 Verdict
-⚠️ Needs Changes
+✅ Approved
 ```
 
 > Note: The Code Quality section only appears when `code-quality: true` is set.

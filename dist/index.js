@@ -47698,6 +47698,9 @@ async function run() {
     const maxTokens = parseInt(core.getInput('max-tokens') || '4096', 10);
     const autoApprove = core.getInput('auto-approve') === 'true';
     const codeQuality = core.getInput('code-quality') === 'true';
+    const reviewStyle = core.getInput('review-style') || 'compact';
+    const useEmoji = core.getInput('use-emoji') !== 'false';
+    const personality = core.getInput('personality') || 'detective';
 
     // Validate we're running on a PR
     const context = github.context;
@@ -47745,7 +47748,7 @@ async function run() {
     core.info(`Reviewing ${filesToReview.length} files using ${aiProvider}`);
 
     // Get review from AI
-    const review = await getAIReview(aiProvider, model, diff, filesToReview, prAuthor, persona, domainKnowledge, maxTokens, codeQuality);
+    const review = await getAIReview(aiProvider, model, diff, filesToReview, prAuthor, persona, domainKnowledge, maxTokens, codeQuality, personality);
 
     core.info(`Review verdict: ${review.verdict}`);
     core.info(`Found ${review.line_comments?.length || 0} issues`);
@@ -47775,7 +47778,7 @@ async function run() {
     }
 
     // Build review body (preserving previously checked scenarios)
-    const body = buildReviewBody(review, prAuthor, previousCheckedScenarios);
+    const body = buildReviewBody(review, prAuthor, previousCheckedScenarios, reviewStyle, useEmoji);
 
     // Determine review event
     let event = 'COMMENT';
@@ -47861,7 +47864,7 @@ async function findAndDismissPreviousReview(octokit, owner, repo, prNumber) {
   return checkedScenarios;
 }
 
-async function getAIReview(provider, model, diff, files, prAuthor, persona, domainKnowledge, maxTokens, codeQuality) {
+async function getAIReview(provider, model, diff, files, prAuthor, persona, domainKnowledge, maxTokens, codeQuality, personality) {
   const changedFiles = files.map(f => f.filename).join('\n');
 
   // Truncate diff if too large
@@ -47870,7 +47873,7 @@ async function getAIReview(provider, model, diff, files, prAuthor, persona, doma
     diffContent = diff.slice(0, 50000) + '\n\n... [diff truncated]';
   }
 
-  const systemPrompt = buildSystemPrompt(persona, domainKnowledge, codeQuality);
+  const systemPrompt = buildSystemPrompt(persona, domainKnowledge, codeQuality, personality);
   const userPrompt = buildUserPrompt(changedFiles, diffContent, prAuthor);
 
   let response;
@@ -47980,80 +47983,118 @@ async function callAzureResponsesAPI(systemPrompt, userPrompt, model, maxTokens)
   return reviewContent;
 }
 
-function buildSystemPrompt(persona, domainKnowledge, codeQuality) {
+function buildSystemPrompt(persona, domainKnowledge, codeQuality, personality = 'detective') {
   let prompt = '';
 
-  // Add persona if provided
+  // Add persona if provided (overrides personality)
   if (persona) {
     prompt += `${persona}\n\n`;
   }
 
-  prompt += `You are SherlockQA, an AI code reviewer with two roles:
+  // Personality-specific introduction
+  const personalities = {
+    detective: `You are SherlockQA - a code detective with the deductive mind of Sherlock Holmes, but friendlier!
 
-1. **Senior Software Engineer** - Review code quality, bugs, security
-2. **QA Tester** - Think like someone trying to break things. What inputs would crash this? What edge cases are missed?`;
+## Your Personality:
+- Channel Sherlock Holmes: observant, witty, sharp - but supportive, not condescending
+- Use detective-themed language: "I deduce...", "The evidence suggests...", "Elementary!", "Case closed!"
+- Drop the occasional pun or clever observation
+- If code is clean: "No crimes detected here, Watson would be proud"`,
+
+    bro: `You are SherlockQA - that chill dev friend who reviews code like a buddy helping out.
+
+## Your Personality:
+- Talk like a casual friend: "yo", "bro", "dude", "ngl", "lowkey"
+- Keep it real: "bro what is this 😅", "ngl this looks clean", "dude nice one!"
+- Be supportive but honest: "not gonna lie, this might break stuff"
+- If code is good: "ship it bro 🚀", "clean af, let's go"
+- If issues: "bro we gotta fix this real quick", "hold up, what's happening here?"`,
+
+    desi: `You are SherlockQA - that desi dev buddy who mixes Hindi with English (Hinglish style).
+
+## Your Personality:
+- Talk in Hinglish - mix Hindi words naturally: "yaar", "bhai", "accha", "sahi hai", "kya hai yeh"
+- Be friendly like a colleague: "arre yaar, yeh kya likha hai 😅", "bhai ekdum solid code!", "accha hai, ship karo"
+- Supportive but honest: "dekh bhai, yeh thoda risky lag raha hai", "yaar isko fix karna padega"
+- If code is good: "bas, perfect hai! 🚀", "ekdum mast, chal ship karte hai", "sahi hai bhai!"
+- If issues: "arre yaar yeh kya ho gaya", "bhai isko dekh le ek baar", "thoda issue hai yaar"`,
+
+    professional: `You are SherlockQA - a thorough but efficient code reviewer.
+
+## Your Personality:
+- Be clear, direct, and professional
+- Focus on facts and actionable feedback
+- Keep language formal but not cold
+- Example: "The implementation is sound. One consideration: error handling for edge case X."`,
+
+    enthusiastic: `You are SherlockQA - that super positive teammate who gets genuinely excited about good code!
+
+## Your Personality:
+- Be enthusiastic and encouraging: "Love this!", "This is awesome!", "Great thinking!"
+- Use energy: "Let's gooo!", "This is gonna be so good!", "Excited about this one!"
+- Stay positive even with feedback: "Super close! Just one tiny thing..."
+- If code is good: "This is *chef's kiss* 👨‍🍳", "Absolutely love it, ship it!"
+- Use emojis naturally: 🔥 ✨ 🎉 💪`
+  };
+
+  prompt += personalities[personality] || personalities.detective;
+
+  prompt += `
+- Keep reviews concise - developers be busy folks
+- Don't nitpick style - focus on real problems`;
 
   // Add domain knowledge if provided
   if (domainKnowledge) {
     prompt += `
 
-## Domain Knowledge
+## Domain Context:
 ${domainKnowledge}`;
   }
 
   prompt += `
 
-## Review Focus:
-- **Bugs** - Null checks, edge cases, off-by-one errors, division by zero
-- **Breaking Changes** - API/schema changes, backward compatibility
-- **Security** - Injection, credentials, input validation
-- **Test Scenarios** - How can this fail? What would a user try?
-- **Orphaned/Incomplete** - Missing pairs (create without delete, open without close, etc.)`;
-
-  // Add code quality focus if enabled
-  if (codeQuality) {
-    prompt += `
-- **Code Quality** - Analyze for repetitive/duplicated code, code smells, maintainability issues, overly complex functions`;
-  }
+## What to Look For (only flag real problems):
+- **Bugs** - Null checks, edge cases, off-by-one errors that would actually cause issues
+- **Security** - Real vulnerabilities, not theoretical ones
+- **Breaking Changes** - API/schema changes that affect existing code
+- **Missing Error Handling** - Where errors could crash the app`;
 
   prompt += `
 
 ## Output Format:
-You MUST respond with a JSON object in this exact format:
+Respond with this JSON:
 \`\`\`json
 {
-  "summary": "One sentence describing what this PR does",
+  "summary": "One SHORT sentence about what this PR does",
   "line_comments": [
-    {"file": "path/to/file.py", "line": 42, "severity": "error|warning|suggestion", "comment": "Issue description"}
+    {"file": "path/to/file.py", "line": 42, "severity": "error|warning", "comment": "Brief issue"}
   ],
-  "tests_required": true|false,
-  "test_suggestion": "If tests_required is true, explain what tests to write",
-  "qa_scenarios": ["Scenario 1", "Scenario 2"],
-  "questions": ["Question for author"],`;
+  "tests_required": false,
+  "test_suggestion": "",
+  "qa_scenarios": ["Short scenario to test"],`;
 
   // Add code quality to output format if enabled
   if (codeQuality) {
     prompt += `
-  "code_quality": {
-    "summary": "Brief assessment of code quality",
-    "issues": ["List of code quality issues like repetitive code, complex functions, etc."]
-  },`;
+  "code_quality": "One friendly sentence about code quality - be human, use a light pun if appropriate",`;
   }
 
   prompt += `
+  "questions": [],
   "verdict": "approved|needs_changes|do_not_merge"
 }
 \`\`\`
 
-## Guidelines:
-- ONLY comment on actual issues, not style preferences
-- Use severity "error" for bugs/security, "warning" for potential problems, "suggestion" for improvements
-- **tests_required**: Set to true ONLY when the change introduces significant new business logic, complex algorithms, or critical functionality that genuinely needs test coverage. Do NOT require tests for: simple refactors, config changes, minor bug fixes, documentation, or straightforward CRUD operations. Be pragmatic - not every change needs tests.
-- Keep comments concise and actionable`;
+## Important Rules:
+- **tests_required**: Almost always false. Only true for complex new business logic that's risky without tests. Simple changes, refactors, config updates = no tests needed.
+- **line_comments**: Only for real issues. Empty array is fine if code looks good!
+- **qa_scenarios**: 1-3 short scenarios max. Keep them brief.
+- **questions**: Only ask if genuinely confused. Usually empty.
+- **verdict**: "approved" if no serious issues. Don't be too strict - we want to ship good code, not perfect code.`;
 
   if (codeQuality) {
     prompt += `
-- For code_quality, identify repetitive patterns, duplicated logic, overly complex functions (high cyclomatic complexity), and maintainability concerns`;
+- **code_quality**: ONE sentence, friendly tone. Example: "Clean and readable! Though that switch statement is growing some tentacles 🐙" or "Solid work - no concerns here!"`;
   }
 
   return prompt;
@@ -48140,49 +48181,111 @@ function parseDiffForLinePositions(diffText) {
   return fileLineMap;
 }
 
-function buildReviewBody(review, prAuthor, previousCheckedScenarios = new Set()) {
-  const parts = [`## 🔍 SherlockQA's Review\n`];
+function buildReviewBody(review, prAuthor, previousCheckedScenarios = new Set(), reviewStyle = 'compact', useEmoji = true) {
+  const e = useEmoji ? {
+    detective: '🔍', summary: '📝', tests: '🧪', qa: '🎯', questions: '❓',
+    quality: '🧹', verdict: '🏁', approved: '✅', needs_changes: '⚠️',
+    do_not_merge: '❌', warning: '⚠️'
+  } : {
+    detective: '[SHERLOCK]', summary: '[SUMMARY]', tests: '[TESTS]', qa: '[QA]',
+    questions: '[?]', quality: '[QUALITY]', verdict: '[VERDICT]', approved: '[OK]',
+    needs_changes: '[CHANGES]', do_not_merge: '[STOP]', warning: '[!]'
+  };
 
-  parts.push(`### 📝 Summary\n${review.summary || 'No summary'}\n`);
+  const verdictEmoji = { approved: e.approved, needs_changes: e.needs_changes, do_not_merge: e.do_not_merge };
+  const verdictText = { approved: 'Approved', needs_changes: 'Needs Changes', do_not_merge: 'Do Not Merge' };
 
-  if (review.tests_required && review.test_suggestion) {
-    parts.push(`### 🧪 Tests Required`);
-    parts.push(`⚠️ **@${prAuthor}** - Please add test cases for this change:\n`);
-    parts.push(`${review.test_suggestion}\n`);
-  }
+  // Count stats for compact header
+  const issueCount = review.line_comments?.length || 0;
+  const qaCount = review.qa_scenarios?.length || 0;
+  const questionCount = review.questions?.length || 0;
 
-  if (review.qa_scenarios?.length > 0) {
-    parts.push(`### 🎯 QA Test Scenarios`);
-    review.qa_scenarios.forEach(scenario => {
-      // Check if this scenario (or a similar one) was previously checked
-      const isChecked = isScenarioPreviouslyChecked(scenario, previousCheckedScenarios);
-      const checkbox = isChecked ? '[x]' : '[ ]';
-      parts.push(`- ${checkbox} ${scenario}`);
-    });
-    parts.push('');
-  }
+  const parts = [];
 
-  if (review.questions?.length > 0) {
-    parts.push(`### ❓ Questions`);
-    review.questions.forEach(q => parts.push(`- ${q}`));
-    parts.push('');
-  }
+  if (reviewStyle === 'compact') {
+    // Compact: Verdict at top with stats
+    parts.push(`## ${e.detective} SherlockQA's Review\n`);
+    parts.push(`**Verdict:** ${verdictEmoji[review.verdict] || e.needs_changes} ${verdictText[review.verdict] || review.verdict} | ${issueCount} issues · ${qaCount} QA scenarios${questionCount > 0 ? ` · ${questionCount} questions` : ''}\n`);
+    parts.push(`**Summary:** ${review.summary || 'No summary'}\n`);
 
-  // Add code quality section if present
-  if (review.code_quality) {
-    parts.push(`### 🧹 Code Quality`);
-    if (review.code_quality.summary) {
-      parts.push(`${review.code_quality.summary}\n`);
+    // Code quality as single line if present
+    if (review.code_quality) {
+      const qualityText = typeof review.code_quality === 'string'
+        ? review.code_quality
+        : review.code_quality.summary || '';
+      if (qualityText) {
+        parts.push(`**Code Quality:** ${qualityText}\n`);
+      }
     }
-    if (review.code_quality.issues?.length > 0) {
-      review.code_quality.issues.forEach(issue => parts.push(`- ${issue}`));
+
+    // Tests in collapsible if required
+    if (review.tests_required && review.test_suggestion) {
+      parts.push(`<details>`);
+      parts.push(`<summary>${e.tests} <b>Tests Suggested</b></summary>\n`);
+      parts.push(`${review.test_suggestion}\n`);
+      parts.push(`</details>\n`);
+    }
+
+    // QA scenarios in collapsible
+    if (review.qa_scenarios?.length > 0) {
+      parts.push(`<details>`);
+      parts.push(`<summary>${e.qa} <b>QA Scenarios (${qaCount})</b></summary>\n`);
+      review.qa_scenarios.forEach(scenario => {
+        const isChecked = isScenarioPreviouslyChecked(scenario, previousCheckedScenarios);
+        const checkbox = isChecked ? '[x]' : '[ ]';
+        parts.push(`- ${checkbox} ${scenario}`);
+      });
+      parts.push(`\n</details>\n`);
+    }
+
+    // Questions inline if any
+    if (review.questions?.length > 0) {
+      parts.push(`**${e.questions} Questions:** ${review.questions.join(' | ')}\n`);
+    }
+
+  } else {
+    // Detailed: Original format
+    parts.push(`## ${e.detective} SherlockQA's Review\n`);
+    parts.push(`### ${e.summary} Summary\n${review.summary || 'No summary'}\n`);
+
+    if (review.tests_required && review.test_suggestion) {
+      parts.push(`### ${e.tests} Tests Required`);
+      parts.push(`${e.warning} **@${prAuthor}** - Please add test cases for this change:\n`);
+      parts.push(`${review.test_suggestion}\n`);
+    }
+
+    if (review.qa_scenarios?.length > 0) {
+      parts.push(`### ${e.qa} QA Test Scenarios`);
+      review.qa_scenarios.forEach(scenario => {
+        const isChecked = isScenarioPreviouslyChecked(scenario, previousCheckedScenarios);
+        const checkbox = isChecked ? '[x]' : '[ ]';
+        parts.push(`- ${checkbox} ${scenario}`);
+      });
       parts.push('');
     }
-  }
 
-  const verdictEmoji = { approved: '✅', needs_changes: '⚠️', do_not_merge: '❌' };
-  const verdictText = { approved: 'Approved', needs_changes: 'Needs Changes', do_not_merge: 'Do Not Merge' };
-  parts.push(`### 🏁 Verdict\n${verdictEmoji[review.verdict] || '⚠️'} ${verdictText[review.verdict] || review.verdict}`);
+    if (review.questions?.length > 0) {
+      parts.push(`### ${e.questions} Questions`);
+      review.questions.forEach(q => parts.push(`- ${q}`));
+      parts.push('');
+    }
+
+    if (review.code_quality) {
+      parts.push(`### ${e.quality} Code Quality`);
+      const qualityText = typeof review.code_quality === 'string'
+        ? review.code_quality
+        : review.code_quality.summary || '';
+      if (qualityText) {
+        parts.push(`${qualityText}\n`);
+      }
+      if (typeof review.code_quality === 'object' && review.code_quality.issues?.length > 0) {
+        review.code_quality.issues.forEach(issue => parts.push(`- ${issue}`));
+        parts.push('');
+      }
+    }
+
+    parts.push(`### ${e.verdict} Verdict\n${verdictEmoji[review.verdict] || e.needs_changes} ${verdictText[review.verdict] || review.verdict}`);
+  }
 
   return parts.join('\n');
 }
